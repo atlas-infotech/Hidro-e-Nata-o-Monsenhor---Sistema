@@ -1,52 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import {
-  useDB,
-  db,
-  type Modalidade,
-  type StatusTurma,
-  type Turma,
-} from "@/lib/mock-data";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { useEffect, useMemo, useState } from "react";
+import { supabase } from "@/lib/supabase";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  Plus,
-  Users,
-  Clock,
-  GraduationCap,
-  Pencil,
-  Search,
-  CalendarDays,
-  Filter,
-  Waves,
-  Baby,
-  HeartPulse,
-} from "lucide-react";
-import { useMemo, useState } from "react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Plus, Search, Pencil, RefreshCw, MoreHorizontal, Trash2, MinusCircle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_admin/turmas")({
@@ -54,568 +18,486 @@ export const Route = createFileRoute("/_admin/turmas")({
   component: TurmasAdmin,
 });
 
-type ModalidadeFiltro = "todas" | Modalidade;
-type StatusFiltro = "todos" | StatusTurma;
-type DiaFiltro = "todos" | "segqua" | "terqui";
+type Modalidade = "Natação Infantil" | "Natação Adulta" | "Hidroginástica";
+type StatusTurma = "ativa" | "inativa";
+
+type Turma = {
+  id: string;
+  nome: string;
+  modalidade: string;
+  dia_semana: string | null;
+  horario_inicio: string | null;
+  horario_fim: string | null;
+  professor: string | null;
+  vagas_total: number;
+  ativa: boolean;
+  criado_em: string;
+};
 
 const statusColors: Record<StatusTurma, string> = {
   ativa: "bg-success/15 text-success border-success/40",
-  encerrada: "bg-muted text-muted-foreground border-border",
-  "em formação": "bg-warning/20 text-warning-foreground border-warning/40",
+  inativa: "bg-muted text-muted-foreground border-border",
 };
 
-const modalidadeStyles: Record<
-  Modalidade,
-  {
-    icon: typeof Waves;
-    badge: string;
-    border: string;
-    soft: string;
-  }
-> = {
-  "Natação Infantil": {
-    icon: Baby,
-    badge: "bg-sky-100 text-sky-800 border-sky-200",
-    border: "border-l-sky-400",
-    soft: "bg-sky-50 text-sky-700",
-  },
-  "Natação Adulta": {
-    icon: Waves,
-    badge: "bg-blue-100 text-blue-800 border-blue-200",
-    border: "border-l-blue-500",
-    soft: "bg-blue-50 text-blue-700",
-  },
-  Hidroginástica: {
-    icon: HeartPulse,
-    badge: "bg-cyan-100 text-cyan-800 border-cyan-200",
-    border: "border-l-cyan-500",
-    soft: "bg-cyan-50 text-cyan-700",
-  },
-};
+function statusDaTurma(turma: Turma): StatusTurma {
+  return turma.ativa ? "ativa" : "inativa";
+}
 
-const modalidades: Modalidade[] = [
-  "Hidroginástica",
-  "Natação Infantil",
-  "Natação Adulta",
-];
+function formatarHorario(inicio?: string | null, fim?: string | null) {
+  if (!inicio && !fim) return "—";
+  const i = inicio ? inicio.slice(0, 5) : "";
+  const f = fim ? fim.slice(0, 5) : "";
+  if (i && f) return `${i} às ${f}`;
+  return i || f || "—";
+}
 
 function TurmasAdmin() {
-  const { turmas } = useDB();
+  const [turmas, setTurmas] = useState<Turma[]>([]);
+  const [carregando, setCarregando] = useState(true);
+  const [q, setQ] = useState("");
+  const [mod, setMod] = useState<"todas" | Modalidade>("todas");
+  const [st, setSt] = useState<"todos" | StatusTurma>("todos");
+  const [novoAberto, setNovoAberto] = useState(false);
+  const [editando, setEditando] = useState<Turma | null>(null);
 
-  const [busca, setBusca] = useState("");
-  const [modalidadeFiltro, setModalidadeFiltro] =
-    useState<ModalidadeFiltro>("todas");
-  const [statusFiltro, setStatusFiltro] = useState<StatusFiltro>("todos");
-  const [diaFiltro, setDiaFiltro] = useState<DiaFiltro>("todos");
+  const carregar = async () => {
+    setCarregando(true);
+
+    const { data, error } = await supabase
+      .from("turmas")
+      .select("*")
+      .order("criado_em", { ascending: false });
+
+    if (error) {
+      console.error(error);
+      toast.error(`Erro ao carregar turmas: ${error.message}`);
+      setCarregando(false);
+      return;
+    }
+
+    setTurmas((data ?? []) as Turma[]);
+    setCarregando(false);
+  };
+
+  useEffect(() => {
+    carregar();
+  }, []);
+
+  const alterarStatus = async (turma: Turma, ativa: boolean) => {
+    const { error } = await supabase
+      .from("turmas")
+      .update({ ativa })
+      .eq("id", turma.id);
+
+    if (error) {
+      console.error(error);
+      toast.error(`Erro ao alterar status: ${error.message}`);
+      return;
+    }
+
+    setTurmas((lista) =>
+      lista.map((t) => (t.id === turma.id ? { ...t, ativa } : t))
+    );
+
+    toast.success(ativa ? "Turma ativada." : "Turma inativada.");
+  };
+
+  const excluirTurma = async (turma: Turma) => {
+    const confirmado = window.confirm(
+      `Tem certeza que deseja excluir "${turma.nome}"? Essa ação não poderá ser desfeita.`
+    );
+
+    if (!confirmado) return;
+
+    const { error } = await supabase
+      .from("turmas")
+      .delete()
+      .eq("id", turma.id);
+
+    if (error) {
+      console.error(error);
+      toast.error(`Erro ao excluir turma: ${error.message}`);
+      return;
+    }
+
+    setTurmas((lista) => lista.filter((t) => t.id !== turma.id));
+    toast.success("Turma excluída.");
+  };
+
+  const list = useMemo(() => {
+    const busca = q.trim().toLowerCase();
+
+    return turmas.filter((t) => {
+      const status = statusDaTurma(t);
+
+      const passaBusca =
+        !busca ||
+        t.nome.toLowerCase().includes(busca) ||
+        t.modalidade.toLowerCase().includes(busca) ||
+        (t.dia_semana ?? "").toLowerCase().includes(busca) ||
+        (t.professor ?? "").toLowerCase().includes(busca);
+
+      const passaModalidade = mod === "todas" || t.modalidade === mod;
+      const passaStatus = st === "todos" || status === st;
+
+      return passaBusca && passaModalidade && passaStatus;
+    });
+  }, [turmas, q, mod, st]);
 
   const resumo = useMemo(() => {
-    const vagasTotais = turmas.reduce((acc, t) => acc + t.vagas, 0);
-    const inscritos = turmas.reduce((acc, t) => acc + t.inscritos, 0);
-    const vagasDisponiveis = Math.max(0, vagasTotais - inscritos);
-    const turmasAtivas = turmas.filter((t) => t.status === "ativa").length;
-    const turmasLotadas = turmas.filter((t) => t.inscritos >= t.vagas).length;
+    const ativas = turmas.filter((t) => t.ativa).length;
+    const vagas = turmas.reduce((acc, t) => acc + (t.vagas_total || 0), 0);
 
-    return {
-      vagasTotais,
-      inscritos,
-      vagasDisponiveis,
-      turmasAtivas,
-      turmasLotadas,
-    };
+    return { ativas, vagas };
   }, [turmas]);
 
-  const turmasFiltradas = useMemo(() => {
-    const termo = busca.trim().toLowerCase();
-
-    return turmas
-      .filter((t) => {
-        const texto = [
-          t.nome,
-          t.modalidade,
-          t.diasHorario,
-          t.professor,
-          t.faixaEtaria,
-          t.status,
-        ]
-          .join(" ")
-          .toLowerCase();
-
-        const passaBusca = !termo || texto.includes(termo);
-        const passaModalidade =
-          modalidadeFiltro === "todas" || t.modalidade === modalidadeFiltro;
-        const passaStatus = statusFiltro === "todos" || t.status === statusFiltro;
-        const passaDia =
-          diaFiltro === "todos" ||
-          (diaFiltro === "segqua" && t.diasHorario.startsWith("Segunda")) ||
-          (diaFiltro === "terqui" && t.diasHorario.startsWith("Terça"));
-
-        return passaBusca && passaModalidade && passaStatus && passaDia;
-      })
-      .sort((a, b) => {
-        const mod = modalidadeOrdem(a.modalidade) - modalidadeOrdem(b.modalidade);
-        if (mod !== 0) return mod;
-
-        const dia = diaOrdem(a.diasHorario) - diaOrdem(b.diasHorario);
-        if (dia !== 0) return dia;
-
-        return extrairHora(a.diasHorario).localeCompare(extrairHora(b.diasHorario));
-      });
-  }, [turmas, busca, modalidadeFiltro, statusFiltro, diaFiltro]);
-
-  const agrupadas = useMemo(() => {
-    return modalidades
-      .map((modalidade) => ({
-        modalidade,
-        turmas: turmasFiltradas.filter((t) => t.modalidade === modalidade),
-      }))
-      .filter((grupo) => grupo.turmas.length > 0);
-  }, [turmasFiltradas]);
-
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className="font-display text-xl font-semibold">Turmas e horários</h2>
-          <p className="text-sm text-muted-foreground">
-            Organização das atividades por modalidade, dias e horários.
-          </p>
-        </div>
-
-        <TurmaDialog />
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <ResumoCard
-          titulo="Turmas ativas"
-          valor={resumo.turmasAtivas}
-          descricao={`${turmas.length} turmas no total`}
-          icon={CalendarDays}
-        />
-        <ResumoCard
-          titulo="Vagas disponíveis"
-          valor={resumo.vagasDisponiveis}
-          descricao={`${resumo.vagasTotais} vagas cadastradas`}
-          icon={Users}
-        />
-        <ResumoCard
-          titulo="Inscritos"
-          valor={resumo.inscritos}
-          descricao="Alunos vinculados às turmas"
-          icon={GraduationCap}
-        />
-        <ResumoCard
-          titulo="Turmas lotadas"
-          valor={resumo.turmasLotadas}
-          descricao="Sem vagas disponíveis"
-          icon={Filter}
-        />
-      </div>
-
+    <div className="space-y-4">
       <Card>
-        <CardContent className="grid gap-3 p-4 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={busca}
-              onChange={(e) => setBusca(e.target.value)}
-              placeholder="Buscar por modalidade, horário ou professor..."
-              className="pl-9"
-            />
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle>Turmas cadastradas</CardTitle>
+            <CardDescription>
+              {carregando
+                ? "Carregando turmas..."
+                : `${turmas.length} turma(s) no total. ${resumo.ativas} ativa(s). ${resumo.vagas} vaga(s) cadastrada(s).`}
+            </CardDescription>
           </div>
 
-          <Select
-            value={modalidadeFiltro}
-            onValueChange={(v) => setModalidadeFiltro(v as ModalidadeFiltro)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Modalidade" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todas">Todas as modalidades</SelectItem>
-              <SelectItem value="Hidroginástica">Hidroginástica</SelectItem>
-              <SelectItem value="Natação Infantil">Natação Infantil</SelectItem>
-              <SelectItem value="Natação Adulta">Natação Adulta</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={carregar} disabled={carregando}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Atualizar
+            </Button>
 
-          <Select
-            value={diaFiltro}
-            onValueChange={(v) => setDiaFiltro(v as DiaFiltro)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Dias" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todos">Todos os dias</SelectItem>
-              <SelectItem value="segqua">Segunda e quarta</SelectItem>
-              <SelectItem value="terqui">Terça e quinta</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Select
-            value={statusFiltro}
-            onValueChange={(v) => setStatusFiltro(v as StatusFiltro)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todos">Todos os status</SelectItem>
-              <SelectItem value="ativa">Ativas</SelectItem>
-              <SelectItem value="em formação">Em formação</SelectItem>
-              <SelectItem value="encerrada">Encerradas</SelectItem>
-            </SelectContent>
-          </Select>
-        </CardContent>
-      </Card>
-
-      <div className="space-y-6">
-        {turmasFiltradas.length === 0 && (
-          <Card>
-            <CardContent className="p-8 text-center text-sm text-muted-foreground">
-              Nenhuma turma encontrada com os filtros selecionados.
-            </CardContent>
-          </Card>
-        )}
-
-        {agrupadas.map((grupo) => {
-          const Icon = modalidadeStyles[grupo.modalidade].icon;
-
-          return (
-            <section key={grupo.modalidade} className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <span
-                    className={`grid h-10 w-10 place-items-center rounded-xl ${modalidadeStyles[grupo.modalidade].soft}`}
-                  >
-                    <Icon className="h-5 w-5" />
-                  </span>
-
-                  <div>
-                    <h3 className="font-display text-lg font-semibold">
-                      {grupo.modalidade}
-                    </h3>
-                    <p className="text-sm text-muted-foreground">
-                      {grupo.turmas.length} turma
-                      {grupo.turmas.length === 1 ? "" : "s"} encontrada
-                      {grupo.turmas.length === 1 ? "" : "s"}.
-                    </p>
-                  </div>
-                </div>
-
-                <Badge
-                  variant="outline"
-                  className={modalidadeStyles[grupo.modalidade].badge}
-                >
-                  {totalVagas(grupo.turmas)} vagas
-                </Badge>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {grupo.turmas.map((t) => (
-                  <TurmaCard key={t.id} turma={t} />
-                ))}
-              </div>
-            </section>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ResumoCard({
-  titulo,
-  valor,
-  descricao,
-  icon: Icon,
-}: {
-  titulo: string;
-  valor: number;
-  descricao: string;
-  icon: typeof Users;
-}) {
-  return (
-    <Card>
-      <CardContent className="flex items-center justify-between gap-4 p-4">
-        <div>
-          <p className="text-sm text-muted-foreground">{titulo}</p>
-          <p className="mt-1 text-2xl font-semibold text-foreground">{valor}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{descricao}</p>
-        </div>
-
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent text-accent-foreground">
-          <Icon className="h-5 w-5" />
-        </span>
-      </CardContent>
-    </Card>
-  );
-}
-
-function TurmaCard({ turma }: { turma: Turma }) {
-  const ocupacao = Math.min(
-    100,
-    Math.round((turma.inscritos / Math.max(1, turma.vagas)) * 100)
-  );
-
-  const vagasDisponiveis = Math.max(0, turma.vagas - turma.inscritos);
-  const lotada = vagasDisponiveis === 0;
-  const poucasVagas = !lotada && vagasDisponiveis <= 3;
-  const estilo = modalidadeStyles[turma.modalidade];
-
-  return (
-    <Card
-      className={`border-l-4 ${estilo.border}`}
-      style={{ boxShadow: "var(--shadow-card)" }}
-    >
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <CardTitle className="truncate text-base">{turma.nome}</CardTitle>
-            <CardDescription>{turma.modalidade}</CardDescription>
+            <Button type="button" onClick={() => setNovoAberto(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Nova turma
+            </Button>
           </div>
+        </CardHeader>
 
-          <Badge
-            variant="outline"
-            className={`shrink-0 capitalize ${statusColors[turma.status]}`}
-          >
-            {turma.status}
-          </Badge>
-        </div>
-      </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Buscar turma"
+                className="pl-9"
+              />
+            </div>
 
-      <CardContent className="space-y-3 text-sm">
-        <div className="grid gap-2">
-          <InfoLinha icon={Clock}>{turma.diasHorario}</InfoLinha>
-          <InfoLinha icon={GraduationCap}>{turma.professor}</InfoLinha>
-          <InfoLinha icon={Users}>Faixa: {turma.faixaEtaria}</InfoLinha>
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-            <span>Ocupação</span>
-            <span className="font-medium text-foreground">
-              {turma.inscritos} / {turma.vagas}
-            </span>
-          </div>
-
-          <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-muted">
-            <div
-              className={`h-full ${
-                lotada
-                  ? "bg-destructive"
-                  : poucasVagas
-                  ? "bg-warning"
-                  : "bg-primary"
-              }`}
-              style={{ width: `${ocupacao}%` }}
-            />
-          </div>
-
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            {lotada
-              ? "Turma sem vagas disponíveis."
-              : `${vagasDisponiveis} vaga${vagasDisponiveis === 1 ? "" : "s"} disponível${
-                  vagasDisponiveis === 1 ? "" : "is"
-                }.`}
-          </p>
-        </div>
-
-        <div className="flex justify-end pt-1">
-          <TurmaDialog
-            turma={turma}
-            trigger={
-              <Button size="sm" variant="outline">
-                <Pencil className="mr-2 h-4 w-4" />
-                Editar
-              </Button>
-            }
-          />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function InfoLinha({
-  icon: Icon,
-  children,
-}: {
-  icon: typeof Clock;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2 text-foreground/80">
-      <Icon className="h-4 w-4 shrink-0 text-primary" />
-      <span className="truncate">{children}</span>
-    </div>
-  );
-}
-
-function TurmaDialog({
-  turma,
-  trigger,
-}: {
-  turma?: Turma;
-  trigger?: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-
-  const empty: Omit<Turma, "id"> = {
-    nome: "",
-    modalidade: "Natação Infantil",
-    diasHorario: "",
-    professor: "Equipe de Educação Física",
-    faixaEtaria: "8 a 17 anos",
-    vagas: 12,
-    inscritos: 0,
-    status: "em formação",
-  };
-
-  const [f, setF] = useState<Omit<Turma, "id">>(turma ?? empty);
-
-  const save = () => {
-    if (!f.nome || !f.diasHorario || !f.professor) {
-      toast.error("Preencha os campos obrigatórios.");
-      return;
-    }
-
-    if (f.inscritos > f.vagas) {
-      toast.error("O número de inscritos não pode ser maior que o número de vagas.");
-      return;
-    }
-
-    if (turma) {
-      db.updateTurma(turma.id, f);
-      toast.success("Turma atualizada.");
-    } else {
-      db.addTurma(f);
-      toast.success("Turma cadastrada.");
-    }
-
-    setOpen(false);
-  };
-
-  const mudarModalidade = (modalidade: Modalidade) => {
-    setF({
-      ...f,
-      modalidade,
-      faixaEtaria:
-        modalidade === "Natação Infantil" ? "8 a 17 anos" : "18 anos ou mais",
-      vagas: modalidade === "Natação Infantil" ? 12 : 16,
-    });
-  };
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o);
-        if (o) setF(turma ?? empty);
-      }}
-    >
-      <DialogTrigger asChild>
-        {trigger ?? (
-          <Button>
-            <Plus className="mr-2 h-4 w-4" />
-            Nova turma
-          </Button>
-        )}
-      </DialogTrigger>
-
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{turma ? "Editar turma" : "Nova turma"}</DialogTitle>
-          <DialogDescription>
-            Defina modalidade, horário, capacidade e status da turma.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="grid gap-3 md:grid-cols-2">
-          <Fld label="Nome">
-            <Input
-              value={f.nome}
-              onChange={(e) => setF({ ...f, nome: e.target.value })}
-              placeholder="Natação Infantil — Seg/Qua 08:00"
-            />
-          </Fld>
-
-          <Fld label="Modalidade">
-            <Select
-              value={f.modalidade}
-              onValueChange={(v) => mudarModalidade(v as Modalidade)}
-            >
+            <Select value={mod} onValueChange={(v) => setMod(v as "todas" | Modalidade)}>
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue placeholder="Modalidade" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="todas">Todas as modalidades</SelectItem>
                 <SelectItem value="Natação Infantil">Natação Infantil</SelectItem>
                 <SelectItem value="Natação Adulta">Natação Adulta</SelectItem>
                 <SelectItem value="Hidroginástica">Hidroginástica</SelectItem>
               </SelectContent>
             </Select>
-          </Fld>
 
-          <Fld label="Dias e horário">
-            <Input
-              value={f.diasHorario}
-              onChange={(e) => setF({ ...f, diasHorario: e.target.value })}
-              placeholder="Segunda e quarta, 08:00"
-            />
-          </Fld>
-
-          <Fld label="Professor responsável">
-            <Input
-              value={f.professor}
-              onChange={(e) => setF({ ...f, professor: e.target.value })}
-            />
-          </Fld>
-
-          <Fld label="Faixa etária">
-            <Input
-              value={f.faixaEtaria}
-              onChange={(e) => setF({ ...f, faixaEtaria: e.target.value })}
-              placeholder="8 a 17 anos"
-            />
-          </Fld>
-
-          <Fld label="Vagas">
-            <Input
-              type="number"
-              min={1}
-              value={f.vagas}
-              onChange={(e) => setF({ ...f, vagas: Number(e.target.value) })}
-            />
-          </Fld>
-
-          <Fld label="Inscritos">
-            <Input
-              type="number"
-              min={0}
-              value={f.inscritos}
-              onChange={(e) => setF({ ...f, inscritos: Number(e.target.value) })}
-            />
-          </Fld>
-
-          <Fld label="Status">
-            <Select
-              value={f.status}
-              onValueChange={(v) => setF({ ...f, status: v as StatusTurma })}
-            >
+            <Select value={st} onValueChange={(v) => setSt(v as "todos" | StatusTurma)}>
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="todos">Todos os status</SelectItem>
                 <SelectItem value="ativa">Ativa</SelectItem>
-                <SelectItem value="em formação">Em formação</SelectItem>
-                <SelectItem value="encerrada">Encerrada</SelectItem>
+                <SelectItem value="inativa">Inativa</SelectItem>
               </SelectContent>
             </Select>
-          </Fld>
-        </div>
+          </div>
+
+          <div className="overflow-x-auto rounded-md border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Nome</TableHead>
+                  <TableHead>Modalidade</TableHead>
+                  <TableHead>Dias</TableHead>
+                  <TableHead>Horário</TableHead>
+                  <TableHead>Professor</TableHead>
+                  <TableHead>Vagas</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Ações</TableHead>
+                </TableRow>
+              </TableHeader>
+
+              <TableBody>
+                {list.map((t) => {
+                  const status = statusDaTurma(t);
+
+                  return (
+                    <TableRow key={t.id}>
+                      <TableCell className="font-medium">{t.nome}</TableCell>
+                      <TableCell>{t.modalidade}</TableCell>
+                      <TableCell>{t.dia_semana || "—"}</TableCell>
+                      <TableCell>{formatarHorario(t.horario_inicio, t.horario_fim)}</TableCell>
+                      <TableCell>{t.professor || "—"}</TableCell>
+                      <TableCell>{t.vagas_total}</TableCell>
+
+                      <TableCell>
+                        <Badge variant="outline" className={`capitalize ${statusColors[status]}`}>
+                          {status}
+                        </Badge>
+                      </TableCell>
+
+                      <TableCell className="text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="icon" variant="ghost">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setEditando(t)}>
+                              <Pencil className="mr-2 h-4 w-4" />
+                              Editar
+                            </DropdownMenuItem>
+
+                            <DropdownMenuSeparator />
+
+                            {t.ativa ? (
+                              <DropdownMenuItem onClick={() => alterarStatus(t, false)}>
+                                <MinusCircle className="mr-2 h-4 w-4" />
+                                Inativar
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem
+                                className="text-success focus:text-success"
+                                onClick={() => alterarStatus(t, true)}
+                              >
+                                <CheckCircle2 className="mr-2 h-4 w-4" />
+                                Ativar
+                              </DropdownMenuItem>
+                            )}
+
+                            <DropdownMenuSeparator />
+
+                            <DropdownMenuItem
+                              className="text-destructive focus:text-destructive"
+                              onClick={() => excluirTurma(t)}
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              Excluir
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+
+                {list.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
+                      {carregando ? "Carregando turmas..." : "Nenhuma turma encontrada."}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <NovaTurmaDialog
+        open={novoAberto}
+        onOpenChange={setNovoAberto}
+        onSaved={carregar}
+      />
+
+      {editando && (
+        <EditarTurmaDialog
+          turma={editando}
+          open={!!editando}
+          onOpenChange={(open) => {
+            if (!open) setEditando(null);
+          }}
+          onSaved={() => {
+            setEditando(null);
+            carregar();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function NovaTurmaDialog({
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => void;
+}) {
+  const [f, setF] = useState({
+    nome: "",
+    modalidade: "Natação Infantil" as Modalidade,
+    dia_semana: "",
+    horario_inicio: "",
+    horario_fim: "",
+    professor: "",
+    vagas_total: 12,
+    ativa: true,
+  });
+
+  useEffect(() => {
+    if (!open) {
+      setF({
+        nome: "",
+        modalidade: "Natação Infantil",
+        dia_semana: "",
+        horario_inicio: "",
+        horario_fim: "",
+        professor: "",
+        vagas_total: 12,
+        ativa: true,
+      });
+    }
+  }, [open]);
+
+  const submit = async () => {
+    if (!f.nome.trim()) {
+      toast.error("Informe o nome da turma.");
+      return;
+    }
+
+    if (!f.modalidade) {
+      toast.error("Informe a modalidade.");
+      return;
+    }
+
+    const { error } = await supabase.from("turmas").insert({
+      nome: f.nome.trim(),
+      modalidade: f.modalidade,
+      dia_semana: f.dia_semana.trim() || null,
+      horario_inicio: f.horario_inicio || null,
+      horario_fim: f.horario_fim || null,
+      professor: f.professor.trim() || null,
+      vagas_total: Number(f.vagas_total) || 0,
+      ativa: f.ativa,
+    });
+
+    if (error) {
+      console.error(error);
+      toast.error(`Erro ao cadastrar turma: ${error.message}`);
+      return;
+    }
+
+    toast.success("Turma cadastrada.");
+    onOpenChange(false);
+    onSaved();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Nova turma</DialogTitle>
+          <DialogDescription>Cadastro de horários, vagas e professor responsável.</DialogDescription>
+        </DialogHeader>
+
+        <FormularioTurma f={f} setF={setF} />
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+          <Button onClick={submit}>Salvar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditarTurmaDialog({
+  turma,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  turma: Turma;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => void;
+}) {
+  const [f, setF] = useState({
+    nome: turma.nome,
+    modalidade: turma.modalidade as Modalidade,
+    dia_semana: turma.dia_semana ?? "",
+    horario_inicio: turma.horario_inicio?.slice(0, 5) ?? "",
+    horario_fim: turma.horario_fim?.slice(0, 5) ?? "",
+    professor: turma.professor ?? "",
+    vagas_total: turma.vagas_total,
+    ativa: turma.ativa,
+  });
+
+  useEffect(() => {
+    if (open) {
+      setF({
+        nome: turma.nome,
+        modalidade: turma.modalidade as Modalidade,
+        dia_semana: turma.dia_semana ?? "",
+        horario_inicio: turma.horario_inicio?.slice(0, 5) ?? "",
+        horario_fim: turma.horario_fim?.slice(0, 5) ?? "",
+        professor: turma.professor ?? "",
+        vagas_total: turma.vagas_total,
+        ativa: turma.ativa,
+      });
+    }
+  }, [open, turma]);
+
+  const save = async () => {
+    if (!f.nome.trim()) {
+      toast.error("Informe o nome da turma.");
+      return;
+    }
+
+    const { error } = await supabase
+      .from("turmas")
+      .update({
+        nome: f.nome.trim(),
+        modalidade: f.modalidade,
+        dia_semana: f.dia_semana.trim() || null,
+        horario_inicio: f.horario_inicio || null,
+        horario_fim: f.horario_fim || null,
+        professor: f.professor.trim() || null,
+        vagas_total: Number(f.vagas_total) || 0,
+        ativa: f.ativa,
+      })
+      .eq("id", turma.id);
+
+    if (error) {
+      console.error(error);
+      toast.error(`Erro ao atualizar turma: ${error.message}`);
+      return;
+    }
+
+    toast.success("Turma atualizada.");
+    onSaved();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Editar turma</DialogTitle>
+          <DialogDescription>Atualizar dados da turma cadastrada.</DialogDescription>
+        </DialogHeader>
+
+        <FormularioTurma f={f} setF={setF} />
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancelar
           </Button>
           <Button onClick={save}>Salvar</Button>
@@ -625,38 +507,117 @@ function TurmaDialog({
   );
 }
 
-function Fld({
-  label,
-  children,
+function FormularioTurma({
+  f,
+  setF,
 }: {
-  label: string;
-  children: React.ReactNode;
+  f: {
+    nome: string;
+    modalidade: Modalidade;
+    dia_semana: string;
+    horario_inicio: string;
+    horario_fim: string;
+    professor: string;
+    vagas_total: number;
+    ativa: boolean;
+  };
+  setF: React.Dispatch<
+    React.SetStateAction<{
+      nome: string;
+      modalidade: Modalidade;
+      dia_semana: string;
+      horario_inicio: string;
+      horario_fim: string;
+      professor: string;
+      vagas_total: number;
+      ativa: boolean;
+    }>
+  >;
 }) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      <Fld label="Nome da turma *">
+        <Input
+          value={f.nome}
+          onChange={(e) => setF({ ...f, nome: e.target.value })}
+          placeholder="Ex.: Infantil — Terça 08:00"
+        />
+      </Fld>
+
+      <Fld label="Modalidade">
+        <Select value={f.modalidade} onValueChange={(v) => setF({ ...f, modalidade: v as Modalidade })}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="Natação Infantil">Natação Infantil</SelectItem>
+            <SelectItem value="Natação Adulta">Natação Adulta</SelectItem>
+            <SelectItem value="Hidroginástica">Hidroginástica</SelectItem>
+          </SelectContent>
+        </Select>
+      </Fld>
+
+      <Fld label="Dia(s) da semana">
+        <Input
+          value={f.dia_semana}
+          onChange={(e) => setF({ ...f, dia_semana: e.target.value })}
+          placeholder="Ex.: Terça e quinta"
+        />
+      </Fld>
+
+      <Fld label="Professor">
+        <Input
+          value={f.professor}
+          onChange={(e) => setF({ ...f, professor: e.target.value })}
+          placeholder="Ex.: Equipe de Educação Física"
+        />
+      </Fld>
+
+      <Fld label="Horário de início">
+        <Input
+          type="time"
+          value={f.horario_inicio}
+          onChange={(e) => setF({ ...f, horario_inicio: e.target.value })}
+        />
+      </Fld>
+
+      <Fld label="Horário de fim">
+        <Input
+          type="time"
+          value={f.horario_fim}
+          onChange={(e) => setF({ ...f, horario_fim: e.target.value })}
+        />
+      </Fld>
+
+      <Fld label="Vagas">
+        <Input
+          type="number"
+          min={0}
+          value={f.vagas_total}
+          onChange={(e) => setF({ ...f, vagas_total: Number(e.target.value) })}
+        />
+      </Fld>
+
+      <Fld label="Status">
+        <Select value={f.ativa ? "ativa" : "inativa"} onValueChange={(v) => setF({ ...f, ativa: v === "ativa" })}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ativa">Ativa</SelectItem>
+            <SelectItem value="inativa">Inativa</SelectItem>
+          </SelectContent>
+        </Select>
+      </Fld>
+    </div>
+  );
+}
+
+function Fld({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
       <Label className="text-sm">{label}</Label>
       {children}
     </div>
   );
-}
-
-function modalidadeOrdem(modalidade: Modalidade): number {
-  if (modalidade === "Hidroginástica") return 1;
-  if (modalidade === "Natação Infantil") return 2;
-  return 3;
-}
-
-function diaOrdem(diasHorario: string): number {
-  if (diasHorario.startsWith("Segunda")) return 1;
-  if (diasHorario.startsWith("Terça")) return 2;
-  return 3;
-}
-
-function extrairHora(diasHorario: string): string {
-  const match = diasHorario.match(/\d{2}:\d{2}/);
-  return match?.[0] ?? diasHorario;
-}
-
-function totalVagas(turmas: Turma[]): number {
-  return turmas.reduce((acc, t) => acc + t.vagas, 0);
 }

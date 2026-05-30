@@ -7,20 +7,54 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { db, type Modalidade, type Turno, horarioSegQua, horarioTerQui } from "@/lib/mock-data";
-import { CheckCircle2, ArrowLeft, AlertTriangle, Stethoscope } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { CheckCircle2, ArrowLeft, AlertTriangle, FileText } from "lucide-react";
 
 export const Route = createFileRoute("/pre-cadastro")({
   head: () => ({
     meta: [
       { title: "Pré-cadastro — Hidro e Natação Monsenhor" },
-      { name: "description", content: "Demonstre interesse nas atividades do Centro Esportivo e Cultural Profª Marta Regina de Carvalho Ferreira." },
+      {
+        name: "description",
+        content:
+          "Demonstre interesse nas atividades do Centro Esportivo e Cultural Profª Marta Regina de Carvalho Ferreira.",
+      },
     ],
   }),
   component: PreCadastroPage,
 });
+
+type Modalidade = "Natação Infantil" | "Natação Adulta" | "Hidroginástica";
+type Turno = "Manhã" | "Tarde" | "Noite";
+
+type Turma = {
+  id: string;
+  nome: string;
+  modalidade: string;
+  dia_semana: string | null;
+  horario_inicio: string | null;
+  horario_fim: string | null;
+  ativa: boolean;
+};
+
+type Errors = Partial<
+  Record<
+    | "nomeAluno"
+    | "nascimento"
+    | "idade"
+    | "modalidade"
+    | "turmaId"
+    | "responsavel"
+    | "whatsapp"
+    | "consent"
+    | "atestado",
+    string
+  >
+>;
+
+const SEM_TURMA = "sem_turma";
 
 function calcIdade(nasc: string): number | null {
   if (!nasc) return null;
@@ -37,29 +71,29 @@ function calcIdade(nasc: string): number | null {
   return Math.max(0, idade);
 }
 
-function turnoDeHora(hora: string): Turno {
+function turnoDeHora(hora?: string | null): Turno {
+  if (!hora) return "Manhã";
+
   const h = parseInt(hora.slice(0, 2), 10);
+
   if (h < 12) return "Manhã";
   if (h < 18) return "Tarde";
   return "Noite";
 }
 
-type Errors = Partial<Record<
-  | "nomeAluno"
-  | "nascimento"
-  | "idade"
-  | "modalidade"
-  | "horario"
-  | "responsavel"
-  | "telefone"
-  | "whatsapp"
-  | "consent"
-  | "atestado",
-  string
->>;
+function somenteNumeros(valor: string) {
+  return valor.replace(/\D/g, "").slice(0, 11);
+}
+
+function descricaoTurma(t: Turma) {
+  const hora = t.horario_inicio?.slice(0, 5) ?? "--:--";
+  return `${t.dia_semana ?? "Dias não definidos"}, às ${hora}`;
+}
 
 function PreCadastroPage() {
+  const [turmas, setTurmas] = useState<Turma[]>([]);
   const [enviado, setEnviado] = useState(false);
+  const [enviando, setEnviando] = useState(false);
   const [consent, setConsent] = useState(false);
   const [cienteAtestado, setCienteAtestado] = useState(false);
   const [errors, setErrors] = useState<Errors>({});
@@ -68,7 +102,7 @@ function PreCadastroPage() {
     nomeAluno: "",
     nascimento: "",
     modalidade: "" as Modalidade | "",
-    horario: "",
+    turmaId: SEM_TURMA,
     escola: "",
     anoSerie: "",
     turma: "",
@@ -84,6 +118,26 @@ function PreCadastroPage() {
     setErrors((e) => ({ ...e, [k]: undefined }));
   };
 
+  const carregarTurmas = async () => {
+    const { data, error } = await supabase
+      .from("turmas")
+      .select("id, nome, modalidade, dia_semana, horario_inicio, horario_fim, ativa")
+      .eq("ativa", true)
+      .order("horario_inicio", { ascending: true });
+
+    if (error) {
+      console.error(error);
+      toast.error(`Erro ao carregar turmas: ${error.message}`);
+      return;
+    }
+
+    setTurmas((data ?? []) as Turma[]);
+  };
+
+  useEffect(() => {
+    carregarTurmas();
+  }, []);
+
   const idade = useMemo(() => calcIdade(form.nascimento), [form.nascimento]);
   const nascInvalida = form.nascimento !== "" && idade === null;
   const isMenor = idade !== null && idade < 18;
@@ -95,61 +149,59 @@ function PreCadastroPage() {
     return ["Natação Adulta", "Hidroginástica"];
   }, [idade]);
 
-  if (form.modalidade && !modalidadesDisponiveis.includes(form.modalidade as Modalidade)) {
-    setTimeout(() => setForm((f) => ({ ...f, modalidade: "", horario: "" })), 0);
-  }
+  useEffect(() => {
+    if (form.modalidade && !modalidadesDisponiveis.includes(form.modalidade as Modalidade)) {
+      setForm((f) => ({ ...f, modalidade: "", turmaId: SEM_TURMA }));
+    }
+  }, [form.modalidade, modalidadesDisponiveis]);
 
-  const horariosDisponiveis = useMemo(() => {
-    if (!form.modalidade) return [] as { label: string; value: string; hora: string }[];
+  const turmasDisponiveis = useMemo(() => {
+    if (!form.modalidade) return [];
 
-    const seg = horarioSegQua
-      .filter((h) => h.modalidade === form.modalidade)
-      .map((h) => ({
-        label: `Segunda e quarta — ${h.hora}`,
-        value: `Seg/Qua ${h.hora}`,
-        hora: h.hora,
-      }));
+    return turmas.filter((t) => t.modalidade === form.modalidade);
+  }, [turmas, form.modalidade]);
 
-    const ter = horarioTerQui
-      .filter((h) => h.modalidade === form.modalidade)
-      .map((h) => ({
-        label: `Terça e quinta — ${h.hora}`,
-        value: `Ter/Qui ${h.hora}`,
-        hora: h.hora,
-      }));
-
-    return [...seg, ...ter];
-  }, [form.modalidade]);
+  const turmaSelecionada = useMemo(() => {
+    return turmas.find((t) => t.id === form.turmaId) ?? null;
+  }, [turmas, form.turmaId]);
 
   const validar = (): boolean => {
     const e: Errors = {};
 
     if (!form.nomeAluno.trim()) e.nomeAluno = "Informe o nome completo.";
+
     if (!form.nascimento) e.nascimento = "Informe a data de nascimento.";
     else if (nascInvalida) e.nascimento = "Data de nascimento inválida.";
-    else if (idade !== null && !idadeMinimaOk)
+    else if (idade !== null && !idadeMinimaOk) {
       e.idade = "As inscrições são permitidas apenas para participantes a partir de 8 anos.";
-
-    if (!form.modalidade) e.modalidade = "Selecione a modalidade desejada.";
-    if (!form.horario) e.horario = "Selecione um horário de interesse.";
-
-    if (isMenor) {
-      if (!form.responsavel.trim()) e.responsavel = "Informe o nome do responsável.";
-      if (!form.telefone.trim()) e.telefone = "Informe o telefone do responsável.";
-      if (!form.whatsapp.trim()) e.whatsapp = "Informe o WhatsApp do responsável.";
-    } else if (idade !== null) {
-      if (!form.telefone.trim()) e.telefone = "Informe o telefone do participante.";
-      if (!form.whatsapp.trim()) e.whatsapp = "Informe o WhatsApp do participante.";
     }
 
-    if (!cienteAtestado) e.atestado = "É necessário declarar ciência sobre o atestado médico.";
+    if (!form.modalidade) e.modalidade = "Selecione a modalidade desejada.";
+    if (form.turmaId === SEM_TURMA) e.turmaId = "Selecione a turma/horário de preferência.";
+
+    if (isMenor && !form.responsavel.trim()) {
+      e.responsavel = "Informe o nome do responsável.";
+    }
+
+    if (!form.whatsapp.trim()) {
+      e.whatsapp = isMenor
+        ? "Informe o WhatsApp do responsável."
+        : "Informe o WhatsApp do participante.";
+    } else if (form.whatsapp.trim().length < 10) {
+      e.whatsapp = "Informe um WhatsApp válido com DDD.";
+    }
+
+    if (!cienteAtestado) {
+      e.atestado = "É necessário declarar ciência sobre o atestado médico e os documentos pessoais.";
+    }
+
     if (!consent) e.consent = "É necessário autorizar o uso dos dados.";
 
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
-  const submit = (ev: React.FormEvent) => {
+  const submit = async (ev: React.FormEvent) => {
     ev.preventDefault();
 
     if (!validar()) {
@@ -157,29 +209,67 @@ function PreCadastroPage() {
       return;
     }
 
-    const hora = horariosDisponiveis.find((h) => h.value === form.horario)?.hora ?? "08:00";
-    const turno = turnoDeHora(hora);
+    setEnviando(true);
 
-    const escolaTurma = isMenor
-      ? [form.escola, form.anoSerie, form.turma].filter(Boolean).join(" — ") || undefined
-      : undefined;
+    try {
+      const turno = turnoDeHora(turmaSelecionada?.horario_inicio);
 
-    db.addPreCadastro({
-      nomeAluno: form.nomeAluno.trim(),
-      nascimento: form.nascimento,
-      idade: idade ?? 0,
-      modalidade: form.modalidade as Modalidade,
-      turno,
-      escolaTurma,
-      observacoes: form.observacoes.trim() || `Horário de interesse: ${form.horario}`,
-      responsavel: isMenor ? form.responsavel.trim() : "—",
-      telefone: form.telefone.trim(),
-      whatsapp: (form.whatsapp || form.telefone).trim(),
-      email: form.email.trim() || undefined,
+      const escolaTurma = isMenor
+        ? [form.escola, form.anoSerie, form.turma].filter(Boolean).join(" — ") || null
+        : null;
+
+      const horarioInteresse = turmaSelecionada
+        ? `${turmaSelecionada.nome} — ${descricaoTurma(turmaSelecionada)}`
+        : null;
+
+      const { error } = await supabase.from("pre_cadastros").insert({
+        nome_aluno: form.nomeAluno.trim(),
+        nascimento: form.nascimento,
+        idade: idade ?? 0,
+        modalidade: form.modalidade,
+        turno,
+        horario_interesse: horarioInteresse,
+        escola_turma: escolaTurma,
+        observacoes: form.observacoes.trim() || null,
+        responsavel: isMenor ? form.responsavel.trim() : null,
+        telefone: form.telefone.trim() || null,
+        whatsapp: form.whatsapp.trim(),
+        email: form.email.trim() || null,
+        status: "pendente",
+      });
+
+      if (error) {
+        console.error(error);
+        toast.error("Não foi possível enviar o pré-cadastro.");
+        return;
+      }
+
+      setEnviado(true);
+      toast.success("Pré-cadastro enviado com sucesso.");
+    } finally {
+      setEnviando(false);
+    }
+  };
+
+  const limparFormulario = () => {
+    setEnviado(false);
+    setConsent(false);
+    setCienteAtestado(false);
+    setErrors({});
+    setForm({
+      nomeAluno: "",
+      nascimento: "",
+      modalidade: "",
+      turmaId: SEM_TURMA,
+      escola: "",
+      anoSerie: "",
+      turma: "",
+      observacoes: "",
+      responsavel: "",
+      telefone: "",
+      whatsapp: "",
+      email: "",
     });
-
-    setEnviado(true);
-    toast.success("Pré-cadastro enviado com sucesso.");
   };
 
   if (enviado) {
@@ -191,11 +281,13 @@ function PreCadastroPage() {
               <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-success/15 text-success">
                 <CheckCircle2 className="h-7 w-7" />
               </span>
+
               <CardTitle className="mt-3 text-2xl">Pré-cadastro enviado com sucesso.</CardTitle>
+
               <CardDescription className="mx-auto max-w-xl leading-relaxed">
                 A equipe responsável entrará em contato para orientar os próximos passos,
-                verificar disponibilidade de turma e informar sobre a apresentação do atestado
-                médico na secretaria.
+                verificar disponibilidade de turma e orientar sobre a apresentação do atestado
+                médico e dos documentos pessoais necessários na secretaria.
               </CardDescription>
             </CardHeader>
 
@@ -207,30 +299,7 @@ function PreCadastroPage() {
                 </Button>
               </Link>
 
-              <Button
-                onClick={() => {
-                  setEnviado(false);
-                  setConsent(false);
-                  setCienteAtestado(false);
-                  setErrors({});
-                  setForm({
-                    nomeAluno: "",
-                    nascimento: "",
-                    modalidade: "",
-                    horario: "",
-                    escola: "",
-                    anoSerie: "",
-                    turma: "",
-                    observacoes: "",
-                    responsavel: "",
-                    telefone: "",
-                    whatsapp: "",
-                    email: "",
-                  });
-                }}
-              >
-                Enviar novo pré-cadastro
-              </Button>
+              <Button onClick={limparFormulario}>Enviar novo pré-cadastro</Button>
             </CardContent>
           </Card>
         </section>
@@ -253,8 +322,8 @@ function PreCadastroPage() {
             <p>
               O envio deste formulário{" "}
               <strong className="text-foreground">não garante vaga nem confirma matrícula</strong>.
-              A equipe entrará em contato para orientar os próximos passos e confirmar
-              disponibilidade de turma.
+              A turma escolhida representa uma preferência de horário e será confirmada pela
+              secretaria conforme disponibilidade.
             </p>
           </div>
         </div>
@@ -282,25 +351,20 @@ function PreCadastroPage() {
                   onChange={(e) => set("nascimento", e.target.value)}
                   aria-invalid={!!errors.nascimento}
                 />
-
-                {errors.idade && (
-                  <p className="mt-1 text-xs font-medium text-destructive">{errors.idade}</p>
-                )}
+                {errors.idade && <p className="mt-1 text-xs font-medium text-destructive">{errors.idade}</p>}
               </Field>
 
               <Field label="Modalidade desejada *" error={errors.modalidade}>
                 <Select
                   value={form.modalidade || undefined}
                   onValueChange={(v) => {
-                    setForm((f) => ({ ...f, modalidade: v as Modalidade, horario: "" }));
-                    setErrors((e) => ({ ...e, modalidade: undefined, horario: undefined }));
+                    setForm((f) => ({ ...f, modalidade: v as Modalidade, turmaId: SEM_TURMA }));
+                    setErrors((e) => ({ ...e, modalidade: undefined, turmaId: undefined }));
                   }}
                   disabled={!idadeMinimaOk}
                 >
                   <SelectTrigger aria-invalid={!!errors.modalidade}>
-                    <SelectValue
-                      placeholder={idadeMinimaOk ? "Selecione" : "Informe o nascimento"}
-                    />
+                    <SelectValue placeholder={idadeMinimaOk ? "Selecione" : "Informe o nascimento"} />
                   </SelectTrigger>
 
                   <SelectContent>
@@ -313,38 +377,39 @@ function PreCadastroPage() {
                 </Select>
               </Field>
 
-              <Field label="Horário de interesse *" error={errors.horario}>
+              <Field label="Turma/horário desejado *" error={errors.turmaId}>
                 <Select
-                  value={form.horario || undefined}
-                  onValueChange={(v) => set("horario", v)}
+                  value={form.turmaId}
+                  onValueChange={(v) => set("turmaId", v)}
                   disabled={!form.modalidade}
                 >
-                  <SelectTrigger aria-invalid={!!errors.horario}>
+                  <SelectTrigger aria-invalid={!!errors.turmaId}>
                     <SelectValue
-                      placeholder={
-                        form.modalidade ? "Selecione um horário" : "Escolha a modalidade primeiro"
-                      }
+                      placeholder={form.modalidade ? "Selecione uma turma" : "Escolha a modalidade primeiro"}
                     />
                   </SelectTrigger>
 
                   <SelectContent>
-                    {horariosDisponiveis.map((h) => (
-                      <SelectItem key={h.value} value={h.value}>
-                        {h.label}
+                    {turmasDisponiveis.length === 0 && (
+                      <SelectItem value={SEM_TURMA} disabled>
+                        Nenhuma turma disponível
+                      </SelectItem>
+                    )}
+
+                    {turmasDisponiveis.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {descricaoTurma(t)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
 
                 <p className="mt-1 text-xs text-muted-foreground">
-                  A escolha do horário indica preferência e está sujeita à disponibilidade da turma.
+                  A escolha indica preferência e está sujeita à confirmação da secretaria.
                 </p>
               </Field>
 
-              <Field
-                label="Condições de saúde, limitações ou cuidados importantes"
-                className="md:col-span-2"
-              >
+              <Field label="Condições de saúde, limitações ou cuidados importantes" className="md:col-span-2">
                 <Textarea
                   value={form.observacoes}
                   onChange={(e) => set("observacoes", e.target.value)}
@@ -359,9 +424,7 @@ function PreCadastroPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Dados escolares</CardTitle>
-                <CardDescription>
-                  Informe os dados escolares do participante, quando aplicável.
-                </CardDescription>
+                <CardDescription>Informe os dados escolares do participante, quando aplicável.</CardDescription>
               </CardHeader>
 
               <CardContent className="grid gap-4 md:grid-cols-2">
@@ -381,11 +444,11 @@ function PreCadastroPage() {
                   />
                 </Field>
 
-                <Field label="Turma">
+                <Field label="Turma escolar">
                   <Input
                     value={form.turma}
                     onChange={(e) => set("turma", e.target.value)}
-                    placeholder="Ex.: 3º ano, turma 301"
+                    placeholder="Ex.: turma 301"
                   />
                 </Field>
               </CardContent>
@@ -394,22 +457,13 @@ function PreCadastroPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>
-                {isMenor ? "Dados do responsável" : "Dados de contato do participante"}
-              </CardTitle>
-
-              <CardDescription>
-                Necessários para contato sobre vaga, turma e documentação.
-              </CardDescription>
+              <CardTitle>{isMenor ? "Dados do responsável" : "Dados de contato do participante"}</CardTitle>
+              <CardDescription>Necessários para contato sobre vaga, turma e documentação.</CardDescription>
             </CardHeader>
 
             <CardContent className="grid gap-4 md:grid-cols-2">
               {isMenor && (
-                <Field
-                  label="Nome do responsável *"
-                  error={errors.responsavel}
-                  className="md:col-span-2"
-                >
+                <Field label="Nome do responsável *" error={errors.responsavel} className="md:col-span-2">
                   <Input
                     value={form.responsavel}
                     onChange={(e) => set("responsavel", e.target.value)}
@@ -418,20 +472,23 @@ function PreCadastroPage() {
                 </Field>
               )}
 
-              <Field label="Telefone *" error={errors.telefone}>
+              <Field label="Telefone">
                 <Input
                   value={form.telefone}
-                  onChange={(e) => set("telefone", e.target.value)}
-                  placeholder="(00) 00000-0000"
-                  aria-invalid={!!errors.telefone}
+                  onChange={(e) => set("telefone", somenteNumeros(e.target.value))}
+                  placeholder="Ex.: 24999999999"
+                  inputMode="numeric"
+                  maxLength={11}
                 />
               </Field>
 
               <Field label="WhatsApp *" error={errors.whatsapp}>
                 <Input
                   value={form.whatsapp}
-                  onChange={(e) => set("whatsapp", e.target.value)}
-                  placeholder="(00) 00000-0000"
+                  onChange={(e) => set("whatsapp", somenteNumeros(e.target.value))}
+                  placeholder="Ex.: 24999999999"
+                  inputMode="numeric"
+                  maxLength={11}
                   aria-invalid={!!errors.whatsapp}
                 />
               </Field>
@@ -450,12 +507,13 @@ function PreCadastroPage() {
           <Card>
             <CardContent className="space-y-4 pt-6">
               <div className="flex items-start gap-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
-                <Stethoscope className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground" />
-
+                <FileText className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground" />
                 <p className="text-foreground/85 leading-relaxed">
                   <strong>Atenção:</strong> para participar das atividades aquáticas, será
                   obrigatório apresentar posteriormente um atestado médico que comprove aptidão
-                  física para a prática de natação ou hidroginástica.
+                  física para a prática de natação ou hidroginástica. Também será necessário
+                  apresentar documentos pessoais na secretaria após o pré-cadastro, conforme
+                  orientação da equipe responsável.
                 </p>
               </div>
 
@@ -469,16 +527,14 @@ function PreCadastroPage() {
                   className="mt-0.5"
                   aria-invalid={!!errors.atestado}
                 />
-
                 <span className="text-foreground/85 leading-relaxed">
                   Declaro estar ciente de que a matrícula só poderá ser confirmada mediante
-                  apresentação do atestado médico solicitado pela secretaria.
+                  apresentação do atestado médico e dos documentos pessoais solicitados pela
+                  secretaria.
                 </span>
               </label>
 
-              {errors.atestado && (
-                <p className="text-xs font-medium text-destructive">{errors.atestado}</p>
-              )}
+              {errors.atestado && <p className="text-xs font-medium text-destructive">{errors.atestado}</p>}
 
               <label className="flex cursor-pointer items-start gap-3 text-sm">
                 <Checkbox
@@ -490,21 +546,17 @@ function PreCadastroPage() {
                   className="mt-0.5"
                   aria-invalid={!!errors.consent}
                 />
-
                 <span className="text-foreground/85 leading-relaxed">
                   Autorizo o uso dos dados fornecidos exclusivamente para fins de organização
                   do pré-cadastro, contato da equipe responsável e acompanhamento do atendimento.
                 </span>
               </label>
 
-              {errors.consent && (
-                <p className="text-xs font-medium text-destructive">{errors.consent}</p>
-              )}
+              {errors.consent && <p className="text-xs font-medium text-destructive">{errors.consent}</p>}
 
               {Object.keys(errors).some((key) => Boolean(errors[key as keyof Errors])) && (
                 <div className="flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-
                   <p className="text-destructive">
                     Existem campos obrigatórios não preenchidos. Verifique as mensagens em cada campo.
                   </p>
@@ -520,8 +572,8 @@ function PreCadastroPage() {
               </Button>
             </Link>
 
-            <Button type="submit" size="lg">
-              Enviar pré-cadastro
+            <Button type="submit" size="lg" disabled={enviando}>
+              {enviando ? "Enviando..." : "Enviar pré-cadastro"}
             </Button>
           </div>
         </form>
